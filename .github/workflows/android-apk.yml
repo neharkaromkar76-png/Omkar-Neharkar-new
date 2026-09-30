@@ -24,7 +24,6 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '21'
-          cache: 'gradle'
 
       - name: Set up Android SDK
         run: |
@@ -81,8 +80,12 @@ jobs:
             cp .env.example .env 2>/dev/null || touch .env
           fi
 
-          # Generate debug keystore if it does not exist
-          if [ ! -f debug.keystore ]; then
+          # Restore debug keystore from base64 if present, or generate a fresh one
+          if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
+            echo "Restoring debug keystore from debug.keystore.base64..."
+            base64 -d debug.keystore.base64 > debug.keystore
+          elif [ ! -f debug.keystore ]; then
+            echo "Generating new debug keystore..."
             keytool -genkeypair \
               -v \
               -keystore debug.keystore \
@@ -96,12 +99,18 @@ jobs:
           fi
 
       - name: Build Debug APK with Gradle
-        run: ./gradlew :app:assembleDebug --stacktrace --no-daemon
+        run: ./gradlew :app:assembleDebug --no-build-cache --rerun-tasks --stacktrace --no-daemon
 
       - name: Locate Debug APK
         id: locate_apk
         run: |
-          APK_PATH=$(find app/build/outputs/apk/debug/ -name "*.apk" -type f | head -n 1)
+          APK_PATH=""
+          if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
+            APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          else
+            APK_PATH=$(find app/build/outputs/apk/debug/ -name "*.apk" -type f | head -n 1)
+          fi
+
           if [ -z "$APK_PATH" ]; then
             APK_PATH=$(find . -name "*debug*.apk" -type f | head -n 1)
           fi
