@@ -50,8 +50,8 @@ object CameraMotionEstimator {
         Log.d(TAG, "REFERENCE_ANALYSIS_STARTED: frames=${frames.size}, durationMs=$durationMs, fps=$fps")
 
         if (frames.size < 2) {
-            Log.w(TAG, "Insufficient frames for optical flow analysis (found ${frames.size})")
-            return MotionAnalysisResult.Failure("Reference motion could not be reliably analyzed.")
+            Log.i(TAG, "Insufficient frames for optical flow analysis (found ${frames.size}); synthesizing neutral MotionTimeline")
+            return createNeutralMotionResult(durationMs, fps)
         }
 
         // Convert frames to downscaled grayscale luminance buffers
@@ -161,13 +161,13 @@ object CameraMotionEstimator {
         val totalScaleDelta = abs(maxZoom - 1.0f)
         val totalRotDelta = maxRot
 
-        val hasCameraMovement = (totalDeltaX > 0.012f || totalDeltaY > 0.012f || totalScaleDelta > 0.035f || totalRotDelta > 0.8f || maxX > 0.015f || maxY > 0.015f)
+        val minScale = smoothedSamples.minOfOrNull { it.scale } ?: 1.0f
+        val hasZoomOut = minScale < 0.94f
+        val hasCameraMovement = (totalDeltaX > 0.012f || totalDeltaY > 0.012f || totalScaleDelta > 0.035f || totalRotDelta > 0.8f || maxX > 0.015f || maxY > 0.015f || hasZoomOut)
 
         if (!hasCameraMovement) {
-            Log.w(TAG, "Insufficient camera motion detected in the reference video: maxX=$maxX, maxY=$maxY, maxZoom=$maxZoom, maxRot=$maxRot")
-            return MotionAnalysisResult.InsufficientMotion(
-                "Insufficient camera motion detected in the reference video."
-            )
+            Log.i(TAG, "No measurable camera motion detected in reference video; creating neutral MotionTimeline to preserve Target video cleanly")
+            return createNeutralMotionResult(durationMs, fps)
         }
 
         Log.d(TAG, "REFERENCE_MOTION_SAMPLES: count=${smoothedSamples.size}, avgMotion=$avgMotion, maxZoom=$maxZoom, maxX=$maxX, maxY=$maxY, maxRot=$maxRot")
@@ -741,19 +741,106 @@ object CameraMotionEstimator {
         avgMotion: Float
     ): String {
         val hasWhip = events.any { it.type == MotionType.WHIP_PAN }
-        val hasZoom = maxZoom > 1.15f
-        val hasPan = maxX > 0.05f
+        val hasZoomIn = events.any { it.type == MotionType.ZOOM_IN } || maxZoom > 1.15f
+        val hasZoomOut = events.any { it.type == MotionType.ZOOM_OUT }
+        val hasPan = maxX > 0.04f
+        val hasTilt = maxY > 0.04f
         val hasRot = maxRot > 2.5f
 
         return when {
+            hasZoomIn && hasZoomOut -> "Punch-In & Pull-Out Dynamic Zoom"
             hasWhip -> "Dynamic Whip Pan & Kinetic Tracking"
-            hasZoom && hasPan -> "Push-In Tracking Pan"
-            hasZoom -> "Optical Zoom & Push"
+            hasZoomIn && hasPan -> "Push-In Tracking Pan"
+            hasZoomOut && hasPan -> "Pull-Out Tracking Pan"
+            hasZoomIn -> "Optical Zoom In & Push"
+            hasZoomOut -> "Pull-Out / Wide Reveal Zoom"
+            hasPan && hasTilt -> "Diagonal Floating Camera Move"
+            hasTilt -> "Vertical Crane / Tilt Move"
             hasPan -> "Horizontal Dolly / Tracking Pan"
             hasRot -> "Dutch Angle Dynamic Roll"
             avgMotion > 0.15f -> "Kinetic Handheld Camera"
-            else -> "Smooth Controlled Camera Move"
+            avgMotion > 0.03f -> "Subtle Organic Camera Move"
+            else -> "Static / Locked Camera (Target Preserved)"
         }
+    }
+
+    fun createNeutralMotionResult(durationMs: Long, fps: Float): MotionAnalysisResult.Success {
+        val safeDuration = maxOf(1000L, durationMs)
+        val safeFps = fps.coerceIn(15f, 60f)
+        val stepMs = (1000f / safeFps).toLong().coerceIn(16L, 100L)
+        val count = (safeDuration / stepMs).toInt().coerceIn(10, 60)
+
+        val samples = (0..count).map { i ->
+            val t = (i * stepMs).coerceAtMost(safeDuration)
+            MotionSample(
+                timestampMs = t,
+                normalizedTime = (t.toFloat() / safeDuration.toFloat()).coerceIn(0f, 1f),
+                scale = 1.0f,
+                translationX = 0.0f,
+                translationY = 0.0f,
+                rotationDegrees = 0.0f,
+                velocity = 0.0f,
+                acceleration = 0.0f,
+                confidence = 1.0f
+            )
+        }
+
+        val keyframes = listOf(
+            Keyframe(
+                id = UUID.randomUUID().toString(),
+                timestampMs = 0L,
+                x = 0.5f,
+                y = 0.5f,
+                scale = 1.0f,
+                rotation = 0.0f,
+                easing = EasingType.SMOOTH,
+                motionType = MotionType.NONE,
+                confidence = 1.0f
+            ),
+            Keyframe(
+                id = UUID.randomUUID().toString(),
+                timestampMs = safeDuration,
+                x = 0.5f,
+                y = 0.5f,
+                scale = 1.0f,
+                rotation = 0.0f,
+                easing = EasingType.SMOOTH,
+                motionType = MotionType.NONE,
+                confidence = 1.0f
+            )
+        )
+
+        val events = listOf(
+            DetectedEvent(
+                id = UUID.randomUUID().toString(),
+                startTimeMs = 0L,
+                endTimeMs = safeDuration,
+                type = MotionType.HOLD,
+                confidence = 1.0f,
+                description = "Static locked camera (Target preserved visually)",
+                intensity = 0.0f
+            )
+        )
+
+        val timeline = MotionTimeline(
+            durationMs = safeDuration,
+            sourceFps = safeFps,
+            samples = samples,
+            analysisConfidence = 1.0f,
+            avgMotion = 0.0f,
+            maxZoom = 1.0f,
+            maxX = 0.0f,
+            maxY = 0.0f,
+            maxRotation = 0.0f
+        )
+
+        return MotionAnalysisResult.Success(
+            timeline = timeline,
+            events = events,
+            keyframes = keyframes,
+            motionStyle = "Static / Locked Camera (Target Preserved)",
+            sceneCutsCount = 0
+        )
     }
 
     sealed class MotionAnalysisResult {

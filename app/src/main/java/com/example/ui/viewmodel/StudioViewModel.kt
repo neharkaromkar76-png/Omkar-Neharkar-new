@@ -14,15 +14,19 @@ import com.example.data.model.Keyframe
 import com.example.data.model.SubjectRegion
 import com.example.data.model.TimingMappingMode
 import com.example.data.model.VideoMetadata
+import com.example.data.model.ExtractionProgress
+import com.example.data.model.StyleTransferPreparedPackage
 import com.example.engine.analysis.AiAnalysisService
 import com.example.engine.analysis.TargetSubjectDetector
 import com.example.engine.analysis.VideoMetadataExtractor
+import com.example.engine.media3.Media3MotionExtractionService
 import com.example.engine.motion.MotionTransferEngine
 import com.example.engine.render.VideoRenderEngine
 import com.example.ui.components.StudioStage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,6 +43,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     private val aiService = AiAnalysisService(context)
     private val renderEngine = VideoRenderEngine(context)
+    private val media3MotionService = Media3MotionExtractionService(context)
 
     // Projects list
     val allProjects: StateFlow<List<ProjectEntity>> = repository.allProjects
@@ -132,8 +137,28 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     private val _renderProgress = MutableStateFlow(0f)
     val renderProgress = _renderProgress.asStateFlow()
 
+    // Real-time completion percentage (0-100%) from Media3 export service
+    val exportProgressFlow: SharedFlow<Int> = renderEngine.exportProgressFlow
+
+    init {
+        viewModelScope.launch {
+            renderEngine.exportProgressFlow.collect { percent ->
+                _renderProgress.value = percent / 100f
+            }
+        }
+    }
+
     private val _renderedFile = MutableStateFlow<File?>(null)
     val renderedFile = _renderedFile.asStateFlow()
+
+    // Media3 Frame-by-frame Motion Extraction for AI Style Transfer
+    private val _isExtractingStyleMotion = MutableStateFlow(false)
+    val isExtractingStyleMotion = _isExtractingStyleMotion.asStateFlow()
+
+    private val _styleTransferPackage = MutableStateFlow<StyleTransferPreparedPackage?>(null)
+    val styleTransferPackage = _styleTransferPackage.asStateFlow()
+
+    val styleExtractionProgress: SharedFlow<ExtractionProgress> = media3MotionService.progressFlow
 
     // Settings
     private val _customApiKey = MutableStateFlow("")
@@ -148,6 +173,33 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     // Status / Toast Messages
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage = _errorMessage.asStateFlow()
+
+    fun extractMotionForStyleTransfer(selectedUri: android.net.Uri? = null) {
+        val uri = selectedUri
+            ?: _referenceUri.value
+            ?: _targetUri.value
+            ?: run {
+                _errorMessage.value = "Please select a video first to extract motion metadata"
+                return
+            }
+
+        viewModelScope.launch {
+            _isExtractingStyleMotion.value = true
+            val result = media3MotionService.extractMotionMetadataForStyleTransfer(uri)
+            result.onSuccess { pkg ->
+                _styleTransferPackage.value = pkg
+                _isExtractingStyleMotion.value = false
+            }.onFailure { err ->
+                _isExtractingStyleMotion.value = false
+                _errorMessage.value = "Motion extraction failed: ${err.message}"
+            }
+        }
+    }
+
+    fun cancelMotionExtraction() {
+        media3MotionService.cancelExtraction()
+        _isExtractingStyleMotion.value = false
+    }
 
     fun clearError() {
         _errorMessage.value = null

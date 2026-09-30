@@ -7,28 +7,105 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
-import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
 import android.net.Uri
+import androidx.annotation.OptIn
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.transformer.Composition
+import androidx.media3.transformer.ExportException
+import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.ProgressHolder
+import androidx.media3.transformer.Transformer
 import com.example.data.model.ExportConfig
 import com.example.data.model.Keyframe
 import com.example.data.model.VideoMetadata
 import com.example.engine.analysis.SampleMediaHelper
 import com.example.engine.motion.Interpolator
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
+@OptIn(UnstableApi::class)
 class VideoRenderEngine(private val context: Context) {
 
     private val isCancelled = AtomicBoolean(false)
 
+    // SharedFlow exposing real-time completion percentage (0-100%)
+    private val _exportProgressFlow = MutableSharedFlow<Int>(
+        replay = 1,
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val exportProgressFlow: SharedFlow<Int> = _exportProgressFlow.asSharedFlow()
+
     fun cancel() {
         isCancelled.set(true)
+    }
+
+    /**
+     * Creates a Media3 Transformer instance configured with H.264 video encoding.
+     */
+    fun buildMedia3Transformer(
+        onSuccess: (ExportResult) -> Unit,
+        onError: (ExportException) -> Unit
+    ): Transformer {
+        return Transformer.Builder(context)
+            .setVideoMimeType(MimeTypes.VIDEO_H264)
+            .addListener(object : Transformer.Listener {
+                override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                    _exportProgressFlow.tryEmit(100)
+                    onSuccess(exportResult)
+                }
+
+                override fun onError(
+                    composition: Composition,
+                    exportResult: ExportResult,
+                    exportException: ExportException
+                ) {
+                    onError(exportException)
+                }
+            })
+            .build()
+    }
+
+    /**
+     * Polls Media3 Transformer's ProgressState and emits the real-time completion
+     * percentage (0-100%) to exportProgressFlow.
+     */
+    suspend fun monitorTransformerProgress(
+        transformer: Transformer,
+        progressHolder: ProgressHolder,
+        onStageUpdate: ((String, Float) -> Unit)? = null
+    ) = withContext(Dispatchers.IO) {
+        while (!isCancelled.get() && isActive) {
+            val progressState = transformer.getProgress(progressHolder)
+            when (progressState) {
+                Transformer.PROGRESS_STATE_AVAILABLE -> {
+                    val percent = progressHolder.progress.coerceIn(0, 100)
+                    _exportProgressFlow.emit(percent)
+                    onStageUpdate?.invoke("Transforming video frames ($percent%)", percent / 100f)
+                }
+                Transformer.PROGRESS_STATE_WAITING_FOR_AVAILABILITY -> {
+                    // Waiting for next frame buffer availability
+                }
+                Transformer.PROGRESS_STATE_UNAVAILABLE,
+                Transformer.PROGRESS_STATE_NOT_STARTED -> {
+                    // Not started or progress calculation temporarily unavailable
+                }
+            }
+            delay(50)
+        }
     }
 
     suspend fun renderVideo(
@@ -39,10 +116,13 @@ class VideoRenderEngine(private val context: Context) {
         onProgress: (stage: String, percent: Float) -> Unit
     ): Result<File> = withContext(Dispatchers.IO) {
         isCancelled.set(false)
+        _exportProgressFlow.emit(0)
+
         val outputDir = File(context.filesDir, "rendered_exports").apply { mkdirs() }
-        val outputFile = File(outputDir, "KeyframeStudio_${System.currentTimeMillis()}.mp4")
+        val outputFile = File(outputDir, "MotionMatch_${System.currentTimeMillis()}.mp4")
 
         onProgress("Preparing video render pipeline", 0.05f)
+        _exportProgressFlow.emit(5)
 
         val outWidth = if (exportConfig.width > 0) exportConfig.width else 1080
         val outHeight = if (exportConfig.height > 0) exportConfig.height else 1920
@@ -65,6 +145,7 @@ class VideoRenderEngine(private val context: Context) {
             }
 
             onProgress("Configuring hardware H.264 video encoder", 0.10f)
+            _exportProgressFlow.emit(10)
 
             val bitrate = when (exportConfig.qualityPreset) {
                 "High Quality" -> 12_000_000
@@ -94,6 +175,7 @@ class VideoRenderEngine(private val context: Context) {
             val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
             onProgress("Rendering keyframe motion transformations", 0.15f)
+            _exportProgressFlow.emit(15)
             android.util.Log.d("MotionMatchAI", "EXPORT_MOTION_APPLIED: totalFrames=$totalFrames, outWidth=$outWidth, outHeight=$outHeight, fps=$fps, keyframesCount=${keyframes.size}")
 
             for (frameIdx in 0 until totalFrames) {
@@ -130,25 +212,23 @@ class VideoRenderEngine(private val context: Context) {
                     canvas.drawColor(android.graphics.Color.BLACK)
 
                     val matrix = Matrix()
+                    val srcW = sourceBitmap.width.toFloat()
+                    val srcH = sourceBitmap.height.toFloat()
 
-                        // 1. Center of source
-                        val srcW = sourceBitmap.width.toFloat()
-                        val srcH = sourceBitmap.height.toFloat()
+                    // Calculate scale to fill/fit output viewport
+                    val baseScale = maxOf(outWidth / srcW, outHeight / srcH)
+                    val finalScale = baseScale * transform.scale
 
-                        // Calculate scale to fill/fit output viewport
-                        val baseScale = maxOf(outWidth / srcW, outHeight / srcH)
-                        val finalScale = baseScale * transform.scale
+                    // Center point based on normalized keyframe X and Y
+                    val focusX = transform.x * srcW
+                    val focusY = transform.y * srcH
 
-                        // Center point based on normalized keyframe X and Y
-                        val focusX = transform.x * srcW
-                        val focusY = transform.y * srcH
+                    matrix.postTranslate(-focusX, -focusY)
+                    matrix.postScale(finalScale, finalScale)
+                    matrix.postRotate(transform.rotation)
+                    matrix.postTranslate(outWidth / 2f, outHeight / 2f)
 
-                        matrix.postTranslate(-focusX, -focusY)
-                        matrix.postScale(finalScale, finalScale)
-                        matrix.postRotate(transform.rotation)
-                        matrix.postTranslate(outWidth / 2f, outHeight / 2f)
-
-                        canvas.drawBitmap(sourceBitmap, matrix, paint)
+                    canvas.drawBitmap(sourceBitmap, matrix, paint)
                 } finally {
                     inputSurface.unlockCanvasAndPost(canvas)
                 }
@@ -186,8 +266,10 @@ class VideoRenderEngine(private val context: Context) {
                     }
                 }
 
-                val percent = 0.15f + 0.70f * (frameIdx.toFloat() / totalFrames)
-                onProgress("Rendering frame ${frameIdx + 1}/$totalFrames", percent)
+                val percentFraction = 0.15f + 0.75f * (frameIdx.toFloat() / totalFrames)
+                val percentInt = (percentFraction * 100).toInt().coerceIn(15, 90)
+                _exportProgressFlow.emit(percentInt)
+                onProgress("Rendering frame ${frameIdx + 1}/$totalFrames", percentFraction)
             }
 
             // Signal end of stream to encoder
@@ -215,6 +297,11 @@ class VideoRenderEngine(private val context: Context) {
             }
 
             onProgress("Finalizing MP4 container", 0.95f)
+            _exportProgressFlow.emit(95)
+
+            delay(100)
+            onProgress("Export Complete", 1.0f)
+            _exportProgressFlow.emit(100)
 
             Result.success(outputFile)
         } catch (e: Exception) {

@@ -37,6 +37,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,7 +52,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.ExtractionProgress
 import com.example.data.model.MotionSample
+import com.example.data.model.StyleTransferPreparedPackage
 import com.example.ui.components.CinematicCard
 import com.example.ui.components.MetricChip
 import com.example.ui.components.StudioPrimaryButton
@@ -81,6 +86,9 @@ fun AiAnalysisScreen(
     val aiResult by viewModel.aiResult.collectAsState()
     val targetKeyframes by viewModel.targetKeyframes.collectAsState()
     val referenceMetadata by viewModel.referenceMetadata.collectAsState()
+    val isExtractingStyleMotion by viewModel.isExtractingStyleMotion.collectAsState()
+    val styleTransferPackage by viewModel.styleTransferPackage.collectAsState()
+    val styleExtractionProgress by viewModel.styleExtractionProgress.collectAsState(initial = null)
     val scrollState = rememberScrollState()
 
     Column(
@@ -524,6 +532,14 @@ fun AiAnalysisScreen(
                 }
             }
         }
+
+        // Media3 Frame-by-Frame Motion Extraction for AI Style Transfer
+        Media3StyleTransferSection(
+            viewModel = viewModel,
+            isExtracting = isExtractingStyleMotion,
+            stylePackage = styleTransferPackage,
+            progress = styleExtractionProgress
+        )
     }
 }
 
@@ -623,6 +639,252 @@ private fun RealMotionCurveGraph(
             drawPath(path = yPath, color = Color(0xFF059669), style = Stroke(width = 2.5f))
             drawPath(path = rotPath, color = Color(0xFF7C3AED), style = Stroke(width = 2.0f))
             drawPath(path = zoomPath, color = Color(0xFF2563EB), style = Stroke(width = 3.0f))
+        }
+    }
+}
+
+@Composable
+private fun Media3StyleTransferSection(
+    viewModel: StudioViewModel,
+    isExtracting: Boolean,
+    stylePackage: StyleTransferPreparedPackage?,
+    progress: ExtractionProgress?
+) {
+    var showTelemetryDetails by remember { mutableStateOf(false) }
+
+    CinematicCard(
+        borderColor = if (stylePackage != null) StudioEmerald.copy(alpha = 0.8f) else StudioBorder
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF8B5CF6).copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Timeline,
+                            contentDescription = "Media3 Motion Extraction",
+                            tint = Color(0xFF7C3AED),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Media3 Motion Extraction for AI Style Transfer",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = StudioTextPrimary
+                        )
+                        Text(
+                            text = "Optical flow & keyframe anchors for diffusion/neural style transfer",
+                            fontSize = 11.sp,
+                            color = StudioTextSecondary
+                        )
+                    }
+                }
+
+                if (stylePackage != null) {
+                    StudioStatusPill(
+                        text = "Prepared",
+                        color = StudioEmerald,
+                        bgColor = Color(0xFFECFDF5)
+                    )
+                }
+            }
+
+            if (isExtracting) {
+                // In progress indicator
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(StudioSurfaceHighlight)
+                        .padding(14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val pct = progress?.percentage ?: 0
+                    LinearProgressIndicator(
+                        progress = { pct / 100f },
+                        color = Color(0xFF7C3AED),
+                        trackColor = Color(0xFFE2E8F0),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = progress?.stageMessage ?: "Processing video with Media3...",
+                            fontSize = 12.sp,
+                            color = StudioTextSecondary
+                        )
+                        Text(
+                            text = "$pct%",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF7C3AED)
+                        )
+                    }
+                    StudioSecondaryButton(
+                        text = "Cancel Extraction",
+                        icon = Icons.Default.Cancel,
+                        onClick = { viewModel.cancelMotionExtraction() },
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            } else if (stylePackage == null) {
+                // Trigger button
+                Text(
+                    text = "Extract frame-by-frame motion vectors, acceleration curves, and 3x3 affine matrices to condition AI style transfer pipelines without temporal flickering.",
+                    fontSize = 12.sp,
+                    color = StudioTextSecondary,
+                    lineHeight = 17.sp
+                )
+                StudioPrimaryButton(
+                    text = "EXTRACT MEDIA3 STYLE TRANSFER METADATA",
+                    icon = Icons.Default.AutoAwesome,
+                    onClick = { viewModel.extractMotionForStyleTransfer() },
+                    modifier = Modifier.fillMaxWidth(),
+                    testTag = "extract_media3_motion_button"
+                )
+            } else {
+                // Prepared Package Summary
+                val prep = stylePackage.preparation
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MetricChip(
+                        label = "Extracted Frames",
+                        value = "${prep.totalFramesExtracted}",
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricChip(
+                        label = "Style Anchors",
+                        value = "${prep.recommendedKeyframeIndices.size}",
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricChip(
+                        label = "Dominant",
+                        value = prep.dominantMotion.displayName,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricChip(
+                        label = "Stability Wt",
+                        value = String.format("%.2f", prep.recommendedTemporalWeight),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                // AI Prompt Guidance Card
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(StudioSurfaceHighlight)
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "AI Conditioning Prompt Guidance",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF7C3AED)
+                    )
+                    Text(
+                        text = prep.promptGuidance,
+                        fontSize = 11.sp,
+                        color = StudioTextPrimary,
+                        lineHeight = 15.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
+                // Action buttons: toggle frame telemetry & re-extract
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    StudioSecondaryButton(
+                        text = if (showTelemetryDetails) "Hide Telemetry" else "View ${prep.totalFramesExtracted} Frames",
+                        icon = Icons.Default.Timeline,
+                        onClick = { showTelemetryDetails = !showTelemetryDetails },
+                        modifier = Modifier.weight(1f)
+                    )
+                    StudioSecondaryButton(
+                        text = "Re-Extract",
+                        icon = Icons.Default.Refresh,
+                        onClick = { viewModel.extractMotionForStyleTransfer() },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                if (showTelemetryDetails) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF0F172A))
+                            .verticalScroll(rememberScrollState())
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "Frame-by-Frame Optical Flow & Matrix Telemetry",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF38BDF8)
+                        )
+                        stylePackage.frameMetadata.take(25).forEach { f ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "F#${f.frameIndex} (${f.timestampMs}ms): dx=${String.format("%+.2f", f.deltaX)}, dy=${String.format("%+.2f", f.deltaY)}, s=${String.format("%.2f", f.scale)}, v=${String.format("%.2f", f.velocity)}",
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = if (f.isKeyAnchorFrame) Color(0xFFFBBF24) else Color(0xFF94A3B8)
+                                )
+                                if (f.isKeyAnchorFrame) {
+                                    Text(
+                                        text = "★ ANCHOR",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFFBBF24)
+                                    )
+                                }
+                            }
+                        }
+                        if (stylePackage.frameMetadata.size > 25) {
+                            Text(
+                                text = "... and ${stylePackage.frameMetadata.size - 25} more frames prepared for AI warp",
+                                fontSize = 10.sp,
+                                color = Color(0xFF64748B),
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

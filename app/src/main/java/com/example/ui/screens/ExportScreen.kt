@@ -68,6 +68,7 @@ fun ExportScreen(
     val isRendering by viewModel.isRendering.collectAsState()
     val renderMessage by viewModel.renderStageMessage.collectAsState()
     val renderProgress by viewModel.renderProgress.collectAsState()
+    val exportProgressPercentage by viewModel.exportProgressFlow.collectAsState(initial = (renderProgress * 100).toInt())
     val renderedFile by viewModel.renderedFile.collectAsState()
     val targetMeta by viewModel.targetMetadata.collectAsState()
 
@@ -121,8 +122,9 @@ fun ExportScreen(
                         .fillMaxWidth()
                         .padding(vertical = 16.dp)
                 ) {
+                    val displayPercent = exportProgressPercentage.coerceIn(0, 100)
                     CircularProgressIndicator(
-                        progress = { renderProgress },
+                        progress = { displayPercent / 100f },
                         color = StudioCyan,
                         trackColor = StudioSurfaceHighlight,
                         strokeWidth = 4.dp,
@@ -142,7 +144,7 @@ fun ExportScreen(
                     Spacer(modifier = Modifier.height(4.dp))
 
                     Text(
-                        text = "${(renderProgress * 100).toInt()}% Rendered",
+                        text = "$displayPercent% Rendered",
                         fontSize = 13.sp,
                         fontFamily = FontFamily.Monospace,
                         color = StudioCyan,
@@ -152,7 +154,7 @@ fun ExportScreen(
                     Spacer(modifier = Modifier.height(14.dp))
 
                     LinearProgressIndicator(
-                        progress = { renderProgress },
+                        progress = { displayPercent / 100f },
                         color = StudioCyan,
                         trackColor = Color(0xFF1E2838),
                         modifier = Modifier

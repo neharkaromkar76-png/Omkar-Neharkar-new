@@ -79,14 +79,58 @@ data class SubjectRegion(
 )
 
 data class ExportConfig(
-    val resolutionName: String = "1080p (Full HD)",
-    val width: Int = 1080,
-    val height: Int = 1920,
+    val resolutionName: String = "480p — Standard",
+    val width: Int = 480,
+    val height: Int = 854,
     val fps: Int = 30,
-    val qualityPreset: String = "High Quality",
+    val qualityPreset: String = "480p — Standard",
     val audioMode: String = "Keep Target Audio", // Keep Target Audio, Mute Target Audio, Reference Audio
     val motionIntensityMultiplier: Float = 1.0f
-)
+) {
+    companion object {
+        const val PRESET_240P = "240p — Ultra Fast"
+        const val PRESET_360P = "360p — Fast"
+        const val PRESET_480P = "480p — Standard"
+        const val PRESET_720P = "720p — High"
+        const val PRESET_ORIGINAL = "Original"
+
+        val ALL_PRESETS = listOf(
+            PRESET_240P,
+            PRESET_360P,
+            PRESET_480P,
+            PRESET_720P,
+            PRESET_ORIGINAL
+        )
+
+        fun createForPreset(
+            preset: String,
+            isPortrait: Boolean,
+            originalWidth: Int = 1080,
+            originalHeight: Int = 1920,
+            fps: Int = 30
+        ): ExportConfig {
+            val (w, h) = when (preset) {
+                PRESET_240P -> if (isPortrait) 240 to 426 else 426 to 240
+                PRESET_360P -> if (isPortrait) 360 to 640 else 640 to 360
+                PRESET_480P -> if (isPortrait) 480 to 854 else 854 to 480
+                PRESET_720P -> if (isPortrait) 720 to 1280 else 1280 to 720
+                PRESET_ORIGINAL -> {
+                    val safeW = ((originalWidth.coerceAtLeast(240)) / 2) * 2
+                    val safeH = ((originalHeight.coerceAtLeast(240)) / 2) * 2
+                    safeW to safeH
+                }
+                else -> if (isPortrait) 480 to 854 else 854 to 480
+            }
+            return ExportConfig(
+                resolutionName = preset,
+                width = w,
+                height = h,
+                fps = fps,
+                qualityPreset = preset
+            )
+        }
+    }
+}
 
 data class MotionSample(
     val timestampMs: Long,
@@ -131,3 +175,64 @@ data class AiAnalysisResult(
     val isSuccess: Boolean = true,
     val errorMessage: String? = null
 )
+
+/**
+ * Frame-by-frame motion metadata extracted via Media3 for AI style transfer conditioning.
+ */
+data class FrameMotionMetadata(
+    val frameIndex: Int,
+    val timestampMs: Long,
+    val normalizedTime: Float, // 0.0 to 1.0
+    val translationX: Float, // Cumulative X position (-1.0 to 1.0)
+    val translationY: Float, // Cumulative Y position (-1.0 to 1.0)
+    val deltaX: Float, // Optical flow delta X from previous frame
+    val deltaY: Float, // Optical flow delta Y from previous frame
+    val scale: Float = 1.0f, // Scale factor
+    val deltaScale: Float = 1.0f,
+    val rotationDegrees: Float = 0f,
+    val deltaRotation: Float = 0f,
+    val velocity: Float = 0f,
+    val acceleration: Float = 0f,
+    val motionType: MotionType = MotionType.NONE,
+    val luminanceEnergy: Float = 0f, // Average frame luminance
+    val opticalFlowMagnitude: Float = 0f,
+    val inlierRatio: Float = 1.0f,
+    val isKeyAnchorFrame: Boolean = false, // Recommended keyframe for AI style generation
+    val temporalStabilityWeight: Float = 0.85f, // AI style transfer temporal consistency weight (0.0 - 1.0)
+    val affineTransformMatrix: List<Float> = listOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+)
+
+/**
+ * Prepared package containing video motion metadata, anchor frames, and AI style transfer instructions.
+ */
+data class StyleTransferPreparation(
+    val videoUri: String,
+    val fileName: String,
+    val totalFramesExtracted: Int,
+    val durationMs: Long,
+    val fps: Float,
+    val width: Int,
+    val height: Int,
+    val motionStyleSummary: String,
+    val dominantMotion: MotionType,
+    val recommendedKeyframeIndices: List<Int>,
+    val recommendedKeyframeTimestampsMs: List<Long>,
+    val recommendedTemporalWeight: Float,
+    val isReadyForStyleTransfer: Boolean = true,
+    val promptGuidance: String,
+    val motionCurveJson: String
+)
+
+data class StyleTransferPreparedPackage(
+    val preparation: StyleTransferPreparation,
+    val frameMetadata: List<FrameMotionMetadata>,
+    val extractedAtTimestamp: Long = System.currentTimeMillis()
+)
+
+data class ExtractionProgress(
+    val percentage: Int, // 0 to 100
+    val currentFrame: Int,
+    val totalFrames: Int,
+    val stageMessage: String
+)
+

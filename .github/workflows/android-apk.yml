@@ -99,7 +99,7 @@ jobs:
           fi
 
       - name: Build Debug APK with Gradle
-        run: ./gradlew :app:assembleDebug --no-build-cache --rerun-tasks --stacktrace --no-daemon
+        run: ./gradlew assembleDebug --no-build-cache --rerun-tasks --stacktrace --no-daemon
 
       - name: Locate Debug APK
         id: locate_apk
