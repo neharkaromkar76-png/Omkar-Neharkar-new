@@ -1,0 +1,6 @@
+{
+  "name": "AI Motion Studio",
+  "description": "AI-assisted video editing and motion keyframe transfer studio for reframing, tracking, and cinematic camera motion.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
