@@ -64,6 +64,9 @@ fun FineTuneScreen(
     val targetMeta by viewModel.targetMetadata.collectAsState()
     val totalDur = targetMeta?.durationMs ?: 10000L
 
+    val isAutoSaving by viewModel.isAutoSaving.collectAsState()
+    val lastSavedTime by viewModel.lastSavedTime.collectAsState()
+
     val scrollState = rememberScrollState()
 
     Column(
@@ -75,30 +78,66 @@ fun FineTuneScreen(
     ) {
         // Stage Header
         Row(
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(StudioCyan),
-                contentAlignment = Alignment.Center
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(text = "5", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(StudioCyan),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(text = "5", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+                Column {
+                    Text(
+                        text = "Fine-Tune Motion",
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = StudioTextPrimary
+                    )
+                    Text(
+                        text = "Adjust motion intensity, timing curves, and custom keyframes",
+                        fontSize = 12.sp,
+                        color = StudioTextSecondary
+                    )
+                }
             }
-            Column {
-                Text(
-                    text = "Fine-Tune Motion",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = StudioTextPrimary
-                )
-                Text(
-                    text = "Adjust motion intensity, timing curves, and custom keyframes",
-                    fontSize = 12.sp,
-                    color = StudioTextSecondary
-                )
+
+            if (isAutoSaving) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(StudioCyan.copy(alpha = 0.15f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "AUTO-SAVING...",
+                        color = StudioCyan,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            } else if (lastSavedTime != null) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFFECFDF5))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "SAVED TO ROOM",
+                        color = Color(0xFF059669),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
 

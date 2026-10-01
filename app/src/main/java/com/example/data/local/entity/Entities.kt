@@ -21,7 +21,8 @@ data class ProjectEntity(
     val status: String = "DRAFT", // DRAFT, ANALYZED, KEYFRAMED, RENDERED
     val renderedVideoPath: String? = null,
     val timingMode: String = "NORMALIZE",
-    val motionIntensity: Float = 1.0f
+    val motionIntensity: Float = 1.0f,
+    val motionTimelineJson: String? = null
 )
 
 @Entity(

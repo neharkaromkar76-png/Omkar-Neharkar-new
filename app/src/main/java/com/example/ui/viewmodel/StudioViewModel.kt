@@ -15,11 +15,13 @@ import com.example.data.model.SubjectRegion
 import com.example.data.model.TimingMappingMode
 import com.example.data.model.VideoMetadata
 import com.example.data.model.ExtractionProgress
+import com.example.data.model.MotionTimeline
 import com.example.data.model.StyleTransferPreparedPackage
 import com.example.engine.analysis.AiAnalysisService
 import com.example.engine.analysis.TargetSubjectDetector
 import com.example.engine.analysis.VideoMetadataExtractor
 import com.example.engine.media3.Media3MotionExtractionService
+import com.example.engine.motion.Interpolator
 import com.example.engine.motion.MotionTransferEngine
 import com.example.engine.render.VideoRenderEngine
 import com.example.ui.components.StudioStage
@@ -185,11 +187,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             _isExtractingStyleMotion.value = true
-            val result = media3MotionService.extractMotionMetadataForStyleTransfer(uri)
-            result.onSuccess { pkg ->
+            val result: Result<StyleTransferPreparedPackage> = media3MotionService.extractMotionMetadataForStyleTransfer(uri)
+            result.onSuccess { pkg: StyleTransferPreparedPackage ->
                 _styleTransferPackage.value = pkg
                 _isExtractingStyleMotion.value = false
-            }.onFailure { err ->
+            }.onFailure { err: Throwable ->
                 _isExtractingStyleMotion.value = false
                 _errorMessage.value = "Motion extraction failed: ${err.message}"
             }
@@ -383,12 +385,21 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         _targetKeyframes.value = updated
     }
 
+    // Debounced Auto-save to Room Database
+    private var autoSaveJob: Job? = null
+    private val _isAutoSaving = MutableStateFlow(false)
+    val isAutoSaving = _isAutoSaving.asStateFlow()
+
+    private val _lastSavedTime = MutableStateFlow<Long?>(null)
+    val lastSavedTime = _lastSavedTime.asStateFlow()
+
     fun resetKeyframes() {
         if (originalGeneratedKeyframes.isNotEmpty()) {
             _targetKeyframes.value = originalGeneratedKeyframes
         } else {
             recomputeMotionTransfer()
         }
+        scheduleDebouncedAutoSave()
     }
 
     fun addKeyframe(keyframe: Keyframe) {
@@ -396,6 +407,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         current.removeAll { it.id == keyframe.id || it.timestampMs == keyframe.timestampMs }
         current.add(keyframe)
         _targetKeyframes.value = current.sortedBy { it.timestampMs }
+        scheduleDebouncedAutoSave()
     }
 
     fun updateKeyframe(keyframe: Keyframe) {
@@ -404,6 +416,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         if (idx != -1) {
             current[idx] = keyframe
             _targetKeyframes.value = current.sortedBy { it.timestampMs }
+            scheduleDebouncedAutoSave()
         }
     }
 
@@ -411,7 +424,120 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val current = _targetKeyframes.value.filterNot { it.id == id }
         if (current.isNotEmpty()) {
             _targetKeyframes.value = current
+            scheduleDebouncedAutoSave()
         }
+    }
+
+    /**
+     * Debounced auto-save: waits for user modifications to settle (500ms debounce),
+     * reconstructs the continuous MotionTimeline curve from the updated keyframe points,
+     * and persists both keyframe entities and the MotionTimeline state into Room database.
+     */
+    fun scheduleDebouncedAutoSave() {
+        autoSaveJob?.cancel()
+        autoSaveJob = viewModelScope.launch {
+            delay(500)
+            _isAutoSaving.value = true
+            try {
+                val projId = _currentProjectId.value ?: run {
+                    val newId = repository.saveProject(
+                        ProjectEntity(
+                            name = _projectName.value,
+                            referenceUri = _referenceUri.value?.toString(),
+                            targetUri = _targetUri.value?.toString(),
+                            referenceDurationMs = _referenceMetadata.value?.durationMs ?: 0L,
+                            targetDurationMs = _targetMetadata.value?.durationMs ?: 0L,
+                            status = "KEYFRAMED"
+                        )
+                    )
+                    _currentProjectId.value = newId
+                    newId
+                }
+
+                val kfs = _targetKeyframes.value
+                val duration = _targetMetadata.value?.durationMs ?: 10000L
+                val fps = _targetMetadata.value?.fps ?: 30f
+
+                // Reconstruct updated continuous MotionTimeline from modified keyframes
+                val updatedTimeline = createMotionTimelineFromKeyframes(kfs, duration, fps)
+
+                // Persist to Room
+                repository.saveProjectMotionTimeline(projId, updatedTimeline, kfs)
+                _lastSavedTime.value = System.currentTimeMillis()
+                android.util.Log.d("MotionMatchAI", "AUTO_SAVE_ROOM: successfully persisted MotionTimeline & ${kfs.size} keyframes for project $projId")
+            } catch (e: Exception) {
+                android.util.Log.e("MotionMatchAI", "Debounced auto-save error: ${e.message}", e)
+            } finally {
+                _isAutoSaving.value = false
+            }
+        }
+    }
+
+    private fun createMotionTimelineFromKeyframes(
+        keyframes: List<Keyframe>,
+        durationMs: Long,
+        fps: Float
+    ): MotionTimeline {
+        val safeDuration = maxOf(1000L, durationMs)
+        val safeFps = fps.coerceIn(15f, 60f)
+        val stepMs = (1000f / safeFps).toLong().coerceIn(16L, 100L)
+        val count = (safeDuration / stepMs).toInt().coerceIn(10, 120)
+
+        val samples = mutableListOf<com.example.data.model.MotionSample>()
+        var maxZoom = 1.0f
+        var maxX = 0.0f
+        var maxY = 0.0f
+        var maxRot = 0.0f
+        var totalMotion = 0.0f
+        var prevX = 0.5f
+        var prevY = 0.5f
+
+        for (i in 0..count) {
+            val t = (i * stepMs).coerceAtMost(safeDuration)
+            val tf = Interpolator.evaluateKeyframeAtTime(t, keyframes)
+            val normT = (t.toFloat() / safeDuration.toFloat()).coerceIn(0f, 1f)
+
+            val tx = tf.x - 0.5f
+            val ty = tf.y - 0.5f
+            val dtSec = maxOf(0.001f, stepMs / 1000f)
+            val vel = kotlin.math.sqrt(((tf.x - prevX) / dtSec).let { it * it } + ((tf.y - prevY) / dtSec).let { it * it })
+            prevX = tf.x
+            prevY = tf.y
+
+            maxZoom = maxOf(maxZoom, tf.scale)
+            maxX = maxOf(maxX, kotlin.math.abs(tx))
+            maxY = maxOf(maxY, kotlin.math.abs(ty))
+            maxRot = maxOf(maxRot, kotlin.math.abs(tf.rotation))
+            totalMotion += vel
+
+            samples.add(
+                com.example.data.model.MotionSample(
+                    timestampMs = t,
+                    normalizedTime = normT,
+                    scale = tf.scale,
+                    translationX = tx,
+                    translationY = ty,
+                    rotationDegrees = tf.rotation,
+                    velocity = vel,
+                    acceleration = 0.0f,
+                    confidence = 1.0f
+                )
+            )
+        }
+
+        val avgMotion = if (samples.isNotEmpty()) totalMotion / samples.size else 0f
+
+        return MotionTimeline(
+            durationMs = safeDuration,
+            sourceFps = safeFps,
+            samples = samples,
+            analysisConfidence = 0.98f,
+            avgMotion = avgMotion,
+            maxZoom = maxZoom,
+            maxX = maxX,
+            maxY = maxY,
+            maxRotation = maxRot
+        )
     }
 
     fun seekTo(timeMs: Long) {
