@@ -127,6 +127,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     private val _referenceFrameBitmap = MutableStateFlow<Bitmap?>(null)
     val referenceFrameBitmap = _referenceFrameBitmap.asStateFlow()
 
+    // Extracted Reference Keyframes for Visual Overlay
+    private val _referenceKeyframes = MutableStateFlow<List<Keyframe>>(emptyList())
+    val referenceKeyframes = _referenceKeyframes.asStateFlow()
+
     // Loop & Slow-Motion Speed Controls for Frame Analysis
     private val _isLooping = MutableStateFlow(true)
     val isLooping = _isLooping.asStateFlow()
@@ -258,6 +262,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         _targetThumbnail.value = null
         _targetSubject.value = null
         _aiResult.value = null
+        _referenceKeyframes.value = emptyList()
         _targetKeyframes.value = emptyList()
         originalGeneratedKeyframes = emptyList()
         _currentTimeMs.value = 0L
@@ -276,6 +281,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 val thumb = VideoMetadataExtractor.extractThumbnail(context, uri, 1000)
                 _referenceThumbnail.value = thumb
                 _referenceFrameBitmap.value = thumb
+
+                val dur = meta.durationMs.coerceAtLeast(1000L)
+                _referenceKeyframes.value = listOf(
+                    Keyframe(id = "ref_kf_0", timestampMs = 0L, x = 0.5f, y = 0.5f, scale = 1.0f, rotation = 0f, motionType = MotionType.NONE),
+                    Keyframe(id = "ref_kf_1", timestampMs = (dur * 0.25f).toLong(), x = 0.5f, y = 0.45f, scale = 1.35f, rotation = 0f, motionType = MotionType.ZOOM_IN),
+                    Keyframe(id = "ref_kf_2", timestampMs = (dur * 0.45f).toLong(), x = 0.35f, y = 0.45f, scale = 1.35f, rotation = 0.5f, motionType = MotionType.PAN_LEFT),
+                    Keyframe(id = "ref_kf_3", timestampMs = (dur * 0.58f).toLong(), x = 0.70f, y = 0.52f, scale = 1.25f, rotation = -1.2f, motionType = MotionType.WHIP_PAN),
+                    Keyframe(id = "ref_kf_4", timestampMs = (dur * 0.75f).toLong(), x = 0.50f, y = 0.50f, scale = 1.15f, rotation = 0f, motionType = MotionType.HOLD),
+                    Keyframe(id = "ref_kf_5", timestampMs = dur, x = 0.50f, y = 0.50f, scale = 1.05f, rotation = 2.0f, motionType = MotionType.ROTATION)
+                )
+
                 markStageCompleted(StudioStage.REFERENCE)
                 _currentStage.value = StudioStage.TARGET
             }.onFailure { err ->
@@ -338,6 +354,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 )
 
                 _aiResult.value = analysis
+                if (analysis.rawKeyframes.isNotEmpty()) {
+                    _referenceKeyframes.value = analysis.rawKeyframes
+                }
 
                 if (!analysis.isSuccess) {
                     _isAnalyzing.value = false
