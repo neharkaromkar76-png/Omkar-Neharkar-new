@@ -124,6 +124,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     private val _previewFrameBitmap = MutableStateFlow<Bitmap?>(null)
     val previewFrameBitmap = _previewFrameBitmap.asStateFlow()
 
+    private val _referenceFrameBitmap = MutableStateFlow<Bitmap?>(null)
+    val referenceFrameBitmap = _referenceFrameBitmap.asStateFlow()
+
+    // Loop & Slow-Motion Speed Controls for Frame Analysis
+    private val _isLooping = MutableStateFlow(true)
+    val isLooping = _isLooping.asStateFlow()
+
+    private val _playbackSpeed = MutableStateFlow(1.0f)
+    val playbackSpeed = _playbackSpeed.asStateFlow()
+
     private var playbackJob: Job? = null
 
     // Render & Export
@@ -263,7 +273,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             val result = VideoMetadataExtractor.extractMetadata(context, uri)
             result.onSuccess { meta ->
                 _referenceMetadata.value = meta
-                _referenceThumbnail.value = VideoMetadataExtractor.extractThumbnail(context, uri, 1000)
+                val thumb = VideoMetadataExtractor.extractThumbnail(context, uri, 1000)
+                _referenceThumbnail.value = thumb
+                _referenceFrameBitmap.value = thumb
                 markStageCompleted(StudioStage.REFERENCE)
                 _currentStage.value = StudioStage.TARGET
             }.onFailure { err ->
@@ -554,6 +566,20 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         }
+
+        // Extract synchronized reference frame for visual comparison
+        _referenceUri.value?.let { refUri ->
+            viewModelScope.launch {
+                val refDuration = _referenceMetadata.value?.durationMs ?: 10000L
+                val mappedRefTime = if (targetDuration > 0) {
+                    (clamped.toFloat() / targetDuration.toFloat() * refDuration).toLong().coerceIn(0L, refDuration)
+                } else clamped.coerceIn(0L, refDuration)
+                val frame = VideoMetadataExtractor.extractThumbnail(context, refUri, mappedRefTime)
+                if (frame != null) {
+                    _referenceFrameBitmap.value = frame
+                }
+            }
+        }
     }
 
     fun togglePlayPause() {
@@ -562,6 +588,37 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             startPlayback()
         }
+    }
+
+    fun toggleLooping() {
+        _isLooping.value = !_isLooping.value
+    }
+
+    fun setPlaybackSpeed(speed: Float) {
+        _playbackSpeed.value = speed.coerceIn(0.25f, 4.0f)
+    }
+
+    fun stepFrameForward() {
+        pausePlayback()
+        val fps = _targetMetadata.value?.fps ?: 30f
+        val stepMs = (1000f / fps).toLong().coerceIn(16L, 100L)
+        val targetDuration = _targetMetadata.value?.durationMs ?: 10000L
+        val nextTime = (_currentTimeMs.value + stepMs).coerceAtMost(targetDuration)
+        seekTo(nextTime)
+    }
+
+    fun stepFrameBackward() {
+        pausePlayback()
+        val fps = _targetMetadata.value?.fps ?: 30f
+        val stepMs = (1000f / fps).toLong().coerceIn(16L, 100L)
+        val prevTime = (_currentTimeMs.value - stepMs).coerceAtLeast(0L)
+        seekTo(prevTime)
+    }
+
+    fun jumpSeconds(deltaSec: Float) {
+        val targetDuration = _targetMetadata.value?.durationMs ?: 10000L
+        val nextTime = (_currentTimeMs.value + (deltaSec * 1000f).toLong()).coerceIn(0L, targetDuration)
+        seekTo(nextTime)
     }
 
     private fun startPlayback() {
@@ -578,12 +635,18 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             while (isActive && _isPlaying.value) {
                 delay(33) // ~30 fps updates
                 val now = System.currentTimeMillis()
-                val delta = now - lastTick
+                val delta = ((now - lastTick) * _playbackSpeed.value).toLong()
                 lastTick = now
 
                 val nextTime = _currentTimeMs.value + delta
                 if (nextTime >= totalMs) {
-                    _currentTimeMs.value = 0L // Loop
+                    if (_isLooping.value) {
+                        _currentTimeMs.value = 0L // Seamless Loop
+                    } else {
+                        _currentTimeMs.value = totalMs
+                        pausePlayback()
+                        break
+                    }
                 } else {
                     _currentTimeMs.value = nextTime
                 }
@@ -591,7 +654,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun pausePlayback() {
+    fun pausePlayback() {
         _isPlaying.value = false
         playbackJob?.cancel()
     }

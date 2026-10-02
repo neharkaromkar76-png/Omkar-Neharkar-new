@@ -100,4 +100,59 @@ class Media3MotionExtractionServiceTest {
         val testTimeline = viewModel.targetKeyframes.value
         assertTrue("Keyframes should contain the added elements", testTimeline.isNotEmpty())
     }
+
+    @Test
+    fun `split-screen layout synchronizes reference and target footage scrubbing`() = runBlocking {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val viewModel = StudioViewModel(app)
+
+        val refUri = Uri.parse(SampleMediaHelper.REFERENCE_SAMPLE_URI)
+        val targetUri = Uri.parse(SampleMediaHelper.TARGET_SAMPLE_URI)
+
+        viewModel.selectReferenceVideo(refUri)
+        viewModel.selectTargetVideo(targetUri)
+
+        // Drain main looper for ViewModelScope coroutines
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+
+        // Verify thumbnails and metadata are loaded for visual comparison
+        assertNotNull("Reference metadata should be loaded", viewModel.referenceMetadata.value)
+        assertNotNull("Target metadata should be loaded", viewModel.targetMetadata.value)
+
+        // Scrub to 2000ms
+        viewModel.seekTo(2000L)
+        assertEquals(2000L, viewModel.currentTimeMs.value)
+    }
+
+    @Test
+    fun `custom playback controls support precise frame stepping and loop toggle`() = runBlocking {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val viewModel = StudioViewModel(app)
+
+        val targetUri = Uri.parse(SampleMediaHelper.TARGET_SAMPLE_URI)
+        viewModel.selectTargetVideo(targetUri)
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+
+        // Seek to 1000ms
+        viewModel.seekTo(1000L)
+        assertEquals(1000L, viewModel.currentTimeMs.value)
+
+        // Step forward 1 frame (~33ms at 30fps)
+        viewModel.stepFrameForward()
+        assertTrue("Stepping forward should advance playhead", viewModel.currentTimeMs.value > 1000L)
+        val advancedTime = viewModel.currentTimeMs.value
+
+        // Step backward 1 frame
+        viewModel.stepFrameBackward()
+        assertTrue("Stepping backward should decrease playhead", viewModel.currentTimeMs.value < advancedTime)
+
+        // Test loop toggle
+        val initialLoop = viewModel.isLooping.value
+        viewModel.toggleLooping()
+        assertEquals(!initialLoop, viewModel.isLooping.value)
+
+        // Test slow-motion playback speed
+        viewModel.setPlaybackSpeed(0.5f)
+        assertEquals(0.5f, viewModel.playbackSpeed.value, 0.001f)
+    }
 }

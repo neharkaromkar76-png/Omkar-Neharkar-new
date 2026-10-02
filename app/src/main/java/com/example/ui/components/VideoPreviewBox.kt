@@ -249,46 +249,87 @@ fun VideoPreviewBox(
                 }
 
                 PreviewMode.SPLIT -> {
-                    // Split view with interactive slider
-                    if (frameBitmap != null) {
+                    // Split view with interactive slider (Reference on Left, User Footage on Right)
+                    if (frameBitmap != null || referenceFrameBitmap != null) {
+                        val leftBitmap = referenceFrameBitmap ?: frameBitmap
+                        val rightBitmap = frameBitmap ?: referenceFrameBitmap
+
                         Box(modifier = Modifier.fillMaxSize()) {
-                            // Left side: original
-                            Image(
-                                bitmap = frameBitmap.asImageBitmap(),
-                                contentDescription = "Original Frame",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
-
-                            // Right side: edited
-                            val scale = currentTransform.scale
-                            val transX = -(currentTransform.x - 0.5f) * boxWidth.value * scale
-                            val transY = -(currentTransform.y - 0.5f) * boxHeight.value * scale
-
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxHeight()
-                                    .fillMaxWidth(1f - splitFraction)
-                                    .align(Alignment.CenterEnd)
-                                    .clip(RoundedCornerShape(0.dp))
-                            ) {
+                            // Left side: Reference video (or original)
+                            if (leftBitmap != null) {
                                 Image(
-                                    bitmap = frameBitmap.asImageBitmap(),
-                                    contentDescription = "Edited Frame",
+                                    bitmap = leftBitmap.asImageBitmap(),
+                                    contentDescription = if (referenceFrameBitmap != null) "Reference Frame" else "Original Frame",
                                     contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .graphicsLayer {
-                                            scaleX = scale
-                                            scaleY = scale
-                                            translationX = transX
-                                            translationY = transY
-                                            rotationZ = currentTransform.rotation
-                                        }
+                                    modifier = Modifier.fillMaxSize()
                                 )
+
+                                // Left Label Pill
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .padding(8.dp)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(if (referenceFrameBitmap != null) StudioAmber.copy(alpha = 0.85f) else StudioSurfaceHighlight)
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = if (referenceFrameBitmap != null) "REFERENCE" else "ORIGINAL",
+                                        color = if (referenceFrameBitmap != null) Color.Black else StudioTextPrimary,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
 
-                            // Divider line
+                            // Right side: User's Footage with motion transform applied
+                            if (rightBitmap != null) {
+                                val scale = currentTransform.scale
+                                val transX = -(currentTransform.x - 0.5f) * boxWidth.value * scale
+                                val transY = -(currentTransform.y - 0.5f) * boxHeight.value * scale
+
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .fillMaxWidth(1f - splitFraction)
+                                        .align(Alignment.CenterEnd)
+                                        .clip(RoundedCornerShape(0.dp))
+                                ) {
+                                    Image(
+                                        bitmap = rightBitmap.asImageBitmap(),
+                                        contentDescription = "User's Footage",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .graphicsLayer {
+                                                scaleX = scale
+                                                scaleY = scale
+                                                translationX = transX
+                                                translationY = transY
+                                                rotationZ = currentTransform.rotation
+                                            }
+                                    )
+
+                                    // Right Label Pill
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(8.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(StudioCyan.copy(alpha = 0.85f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = "YOUR FOOTAGE",
+                                            color = Color.Black,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Interactive Divider Line with drag handle
                             Box(
                                 modifier = Modifier
                                     .offset { IntOffset((boxWidth.toPx() * splitFraction).toInt() - 2, 0) }

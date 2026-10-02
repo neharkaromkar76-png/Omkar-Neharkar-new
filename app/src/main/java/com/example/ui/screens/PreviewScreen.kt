@@ -53,6 +53,8 @@ fun PreviewScreen(
     val isPlaying by viewModel.isPlaying.collectAsState()
     val scrollState = rememberScrollState()
 
+    val referenceBitmap by viewModel.referenceFrameBitmap.collectAsState()
+    val referenceThumb by viewModel.referenceThumbnail.collectAsState()
     val totalDur = targetMeta?.durationMs ?: 10000L
     val aspect = targetMeta?.aspectRatio ?: (16f / 9f)
 
@@ -101,6 +103,7 @@ fun PreviewScreen(
         // Live Video Viewport with Transform & Split Mode
         VideoPreviewBox(
             frameBitmap = frameBitmap,
+            referenceFrameBitmap = referenceBitmap ?: referenceThumb,
             currentTimeMs = currentTimeMs,
             totalDurationMs = totalDur,
             keyframes = keyframes,

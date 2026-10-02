@@ -57,6 +57,7 @@ import com.example.data.model.MotionSample
 import com.example.data.model.StyleTransferPreparedPackage
 import com.example.ui.components.CinematicCard
 import com.example.ui.components.MetricChip
+import com.example.ui.components.SplitScreenComparisonLayout
 import com.example.ui.components.StudioPrimaryButton
 import com.example.ui.components.StudioSecondaryButton
 import com.example.ui.components.StudioStage
@@ -89,6 +90,18 @@ fun AiAnalysisScreen(
     val isExtractingStyleMotion by viewModel.isExtractingStyleMotion.collectAsState()
     val styleTransferPackage by viewModel.styleTransferPackage.collectAsState()
     val styleExtractionProgress by viewModel.styleExtractionProgress.collectAsState(initial = null)
+
+    val referenceBitmap by viewModel.referenceFrameBitmap.collectAsState()
+    val referenceThumb by viewModel.referenceThumbnail.collectAsState()
+    val targetBitmap by viewModel.previewFrameBitmap.collectAsState()
+    val targetThumb by viewModel.targetThumbnail.collectAsState()
+    val targetMetadata by viewModel.targetMetadata.collectAsState()
+    val targetSubject by viewModel.targetSubject.collectAsState()
+    val currentTimeMs by viewModel.currentTimeMs.collectAsState()
+    val isPlaying by viewModel.isPlaying.collectAsState()
+    val isLooping by viewModel.isLooping.collectAsState()
+    val playbackSpeed by viewModel.playbackSpeed.collectAsState()
+
     val scrollState = rememberScrollState()
 
     Column(
@@ -126,6 +139,31 @@ fun AiAnalysisScreen(
                 )
             }
         }
+
+        // Split-Screen Visual Comparison: Reference Video side-by-side with User's Footage for AI Processing
+        SplitScreenComparisonLayout(
+            referenceBitmap = referenceBitmap ?: referenceThumb,
+            referenceMetadata = referenceMetadata,
+            targetBitmap = targetBitmap ?: targetThumb,
+            targetMetadata = targetMetadata,
+            targetSubject = targetSubject,
+            currentTimeMs = currentTimeMs,
+            isPlaying = isPlaying,
+            onTogglePlay = { viewModel.togglePlayPause() },
+            onSeek = { viewModel.seekTo(it) },
+            isLooping = isLooping,
+            onToggleLoop = { viewModel.toggleLooping() },
+            playbackSpeed = playbackSpeed,
+            onSpeedChange = { viewModel.setPlaybackSpeed(it) },
+            onStepFrameForward = { viewModel.stepFrameForward() },
+            onStepFrameBackward = { viewModel.stepFrameBackward() },
+            onJumpSeconds = { viewModel.jumpSeconds(it) },
+            onStartAnalysis = { viewModel.runAiAnalysis() },
+            isAnalyzing = isAnalyzing,
+            analysisProgress = progress,
+            analysisStageMessage = stageMessage,
+            modifier = Modifier.fillMaxWidth()
+        )
 
         // Processing Card (Real 0% -> 100% Progress)
         if (isAnalyzing) {
